@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>TXT 朗读器</title>
+<link rel="stylesheet" href="/panel/style.css?token={{TOKEN}}">
+</head>
+<body>
+<div id="offline" class="offline hidden"><span id="offline-msg"></span></div>
+
+<header>
+  <div class="brand">TXT 朗读器<span class="sub">听书 · 边合成边播</span></div>
+  <div class="hdr-right">
+    <span id="engine-badge" class="badge">引擎检测中…</span>
+    <span id="cache-badge" class="badge ghost">缓存 0 MB</span>
+    <button id="btn-import" class="btn primary">导入 TXT</button>
+  </div>
+</header>
+
+<main>
+  <aside>
+    <section class="pane">
+      <h3>书库 <span id="book-count" class="tiny"></span></h3>
+      <ul id="book-list" class="book-list"></ul>
+    </section>
+    <section class="pane grow">
+      <h3>目录 <span id="chap-book" class="tiny"></span></h3>
+      <ul id="chap-list" class="chap-list"></ul>
+    </section>
+  </aside>
+
+  <section class="reader">
+    <div class="reader-head">
+      <div id="book-title" class="title">还没有打开的书</div>
+      <div class="meta-line">
+        <span id="book-meta" class="meta">先导入一个 TXT 文件吧</span>
+        <label class="enc">编码
+          <select id="sel-enc" title="自动识别不准时，手动指定重读">
+            <option value="auto">自动</option>
+            <option value="utf-8">UTF-8</option>
+            <option value="gb18030">GB18030 / GBK</option>
+            <option value="utf-16">UTF-16</option>
+            <option value="big5">Big5（繁体）</option>
+          </select>
+        </label>
+      </div>
+    </div>
+    <div id="text" class="text"></div>
+    <div id="toast" class="toast hidden"></div>
+  </section>
+</main>
+
+<footer>
+  <div class="ctrl">
+    <button id="btn-prev" class="btn icon" title="上一段">⏮</button>
+    <button id="btn-play" class="btn play" title="播放 / 暂停">▶</button>
+    <button id="btn-next" class="btn icon" title="下一段">⏭</button>
+    <span id="pos" class="pos">— / —</span>
+  </div>
+  <div class="ctrl">
+    <label>音色
+      <select id="sel-voice"></select>
+    </label>
+    <label class="vol">音量
+      <input id="rng-vol" type="range" min="0" max="100" value="100" step="5" title="音量">
+      <span id="vol-num" class="tiny">100%</span>
+    </label>
+    <label>语速
+      <select id="sel-rate">
+        <option value="-30%">很慢</option>
+        <option value="-15%">慢</option>
+        <option value="+0%" selected>正常</option>
+        <option value="+15%">快</option>
+        <option value="+30%">很快</option>
+        <option value="+50%">极快</option>
+      </select>
+    </label>
+  </div>
+  <div class="ctrl">
+    <span id="status" class="status">就绪</span>
+    <button id="btn-export" class="btn">导出整本 mp3</button>
+  </div>
+</footer>
+
+<audio id="audio" preload="auto"></audio>
+<script>window.__TOKEN__ = "{{TOKEN}}"; window.__BUILD__ = "{{BUILD}}";</script>
+<script src="/panel/app.js?token={{TOKEN}}"></script>
+</body>
+</html>

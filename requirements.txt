@@ -1,0 +1,18 @@
+# 依赖（最低要求）
+# 装：pip install -r requirements.txt
+# 国内加速：pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+edge-tts>=7.0            # 在线语音合成（**LGPL-3.0**，仅 srt_composer.py 是 MIT）。
+                         # 它调用的是微软 Edge「大声朗读」服务 —— 见 README「服务条款」一节
+charset-normalizer>=3.0  # TXT 编码自动识别（MIT）—— 中文 TXT 的 UTF-8/GBK/UTF-16 就靠它
+pywebview>=5.0           # 桌面窗口（BSD-3）
+pystray>=0.19            # 系统托盘（**LGPL-3.0**）
+Pillow>=10.0             # 托盘图标绘制（MIT-CMU）
+
+# ── 可选，不是必需 ──
+# ffmpeg：装了就用于更规范的音频拼接与格式转换；不装也能跑
+#   （在线音色输出 mp3、离线音色输出 wav，浏览器两种都能直接播；
+#     导出整本时若无 ffmpeg 会自动退化为 MP3 字节拼接）
+#
+# 若要打包成单文件 exe：
+# pyinstaller>=6.0

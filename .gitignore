@@ -1,0 +1,35 @@
+# ⚠️ 注意：.gitignore 里 `#` 只在**行首**才算注释。
+# 早先写成 `books/          # 导入的正文副本` —— 整行会被当成一个模式，
+# 永远匹配不到任何文件，**等于没写**，主人的书稿与本地 token 差点被推上去。
+# 所以：注释单独一行，模式那行只留模式。
+
+# ── 运行数据（绝不进仓库）──
+books/
+cache/
+data/
+exports/
+
+# ── 构建产物 ──
+build/
+dist/
+*.spec
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+
+# ── 测试与临时 ──
+_test/
+*.log
+*.tmp
+
+# ── 编辑器 / 系统 ──
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
