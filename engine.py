@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 import pathlib
 import re
 import shutil
@@ -109,6 +110,19 @@ class TTSError(RuntimeError):
     pass
 
 
+class SilentText(TTSError):
+    """文本里没有任何可发音的字符（只有标点/符号/空白）。
+
+    典型来源：切段后孤零零的脚注符 ②③④ 或右引号 ”。这类段落
+    **两条嗓子都合成不出音频**（edge 返回空、SAPI rc=0 且不产出 wav），
+    以前会被当成失败而中断整本导出。它不是故障，是"这段没声音"，应当静默跳过。
+    """
+
+
+# 有内容才算可朗读：字母、数字、汉字、日文假名
+_SPEAKABLE = re.compile(r"[0-9A-Za-z\u4e00-\u9fff\u3040-\u30ff]")
+
+
 class TTS:
     """一段文本 → 一个音频文件。在线优先，离线兜底，全部落盘缓存。"""
 
@@ -161,14 +175,18 @@ class TTS:
                            errors="replace", timeout=180,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         if not wav.exists() or wav.stat().st_size < 1024:
-            raise TTSError(f"SAPI 失败：{(r.stderr or '').strip()[:120]}")
+            raise TTSError(
+                f"SAPI 失败：rc={r.returncode} err={(r.stderr or '').strip()[:160]!r} "
+                f"out={(r.stdout or '').strip()[:80]!r} len={len(safe)}")
         return wav
 
     # ── 对外：合成一段（返回 mp3 或 wav 路径）──
     def synth(self, text: str, out_base: pathlib.Path | None = None) -> pathlib.Path:
         text = (text or "").strip()
         if not text:
-            raise TTSError("空文本")
+            raise SilentText("空文本")
+        if not _SPEAKABLE.search(text):
+            raise SilentText(f"没有可念的字符：{text[:10]!r}")
         key = self.key_for(text)
         base = out_base or (self.cache_dir / key)
         mp3, wav = base.with_suffix(".mp3"), base.with_suffix(".wav")
@@ -176,17 +194,23 @@ class TTS:
             if hit.exists() and hit.stat().st_size > 1024:
                 return hit
 
-        if self.prefer_online and self._online_ok is not False:
-            try:
-                self._synth_edge(text, mp3)
-                with self._lock:
-                    self._online_ok = True
-                    self.stats["online"] += 1
-                return mp3
-            except Exception as exc:                # noqa: BLE001
-                with self._lock:
-                    self._online_ok = False
-                print(f"[TTS] 在线合成失败，转离线：{type(exc).__name__}: {str(exc)[:80]}")
+        if self.prefer_online:
+            # 在线合成必须重试：Edge 的 WebSocket 偶尔会 EOF/超时，
+            # 以前一次失败就被 _online_ok 永久关掉，后面几百段全转 SAPI，SAPI 一挂整本报废。
+            last = None
+            for attempt in range(3):
+                try:
+                    self._synth_edge(text, mp3)
+                    with self._lock:
+                        self._online_ok = True
+                        self.stats["online"] += 1
+                    return mp3
+                except Exception as exc:            # noqa: BLE001
+                    last = exc
+                    time.sleep(0.5 * (attempt + 1))
+            with self._lock:
+                self.stats["online_retry_failed"] = self.stats.get("online_retry_failed", 0) + 1
+            print(f"[TTS] 在线合成重试 3 次仍失败，转离线：{type(last).__name__}: {str(last)[:80]}")
         try:
             w = self._synth_sapi(text, base)
             with self._lock:
@@ -296,11 +320,39 @@ def export_mp3(segs: list[dict[str, Any]], tts: TTS, dest: pathlib.Path,
     """
     dest = pathlib.Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    parts: list[pathlib.Path] = []
-    for i, s in enumerate(segs):
-        parts.append(tts.synth(s["text"]))
-        if progress and (i % 5 == 0 or i == len(segs) - 1):
-            progress(i + 1, len(segs))
+    failed: list[int] = []
+    done = [0]
+
+    # 在线合成一段要 3~8 秒（全是 WebSocket 握手开销），串行跑整本书要半小时以上。
+    # 并发 6 路能把整本压到几分钟；顺序由 map 保证，拼出来的音频不会错位。
+    workers = int(os.environ.get("TXT_TTS_WORKERS", "6"))
+
+    def one(idx: int) -> pathlib.Path | None:
+        try:
+            return tts.synth(segs[idx]["text"])
+        except SilentText:
+            # 只有标点/符号的段落：念不出声，不是失败，静默跳过
+            return None
+        except Exception as exc:                    # noqa: BLE001
+            # 单段失败不该毁掉整本：记下来跳过，最后如实报告。
+            failed.append(idx)
+            print(f"[export_mp3] 第{idx}段跳过：{type(exc).__name__}: {str(exc)[:80]}")
+            return None
+        finally:
+            with threading.Lock():
+                done[0] += 1
+                if progress and (done[0] % 5 == 0 or done[0] == len(segs)):
+                    progress(done[0], len(segs))
+
+    if workers <= 1 or len(segs) <= 2:
+        parts = [p for p in (one(i) for i in range(len(segs))) if p]
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            parts = [p for p in ex.map(one, range(len(segs))) if p]
+    if not parts:
+        raise TTSError(f"全部 {len(segs)} 段都合成失败，无法导出音频")
+    if failed:
+        print(f"[export_mp3] 共跳过 {len(failed)} 段（成功 {len(parts)} 段）")
 
     if FFMPEG:
         lst = dest.with_suffix(".concat.txt")

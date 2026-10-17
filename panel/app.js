@@ -16,6 +16,7 @@ const S = {
   playing: false,
   loading: false,
   chapter: -1,
+  lang: "zh",        // 中英对照书：这一段念中文(zh)还是英文(en)
 };
 
 /* ── 网络 ── */
@@ -118,6 +119,71 @@ function renderBooks() {
         return;
       }
       openBook(b.id);
+    });
+    ul.appendChild(li);
+  });
+}
+
+/* ── docx 仓库（译文 docx 的集中存放处）── */
+async function loadDocxs() {
+  try {
+    const d = await api("/api/docxs");
+    renderDocxs(d.items || []);
+  } catch (e) {
+    // 仓库读不到不该影响听书，只把提示放清单里
+    const ul = $("docx-list");
+    if (ul) ul.innerHTML = '<li style="cursor:default;color:#9aa0b4">仓库读不到：' +
+      (e && e.message ? e.message : "未知错误") + "</li>";
+  }
+}
+
+function fmtSize(n) {
+  if (n >= 1048576) return (n / 1048576).toFixed(1) + " MB";
+  return Math.max(1, Math.round(n / 1024)) + " KB";
+}
+
+/* 仓库文件名形如「书名_难度3_中英对照版.docx」——侧栏窄，拆成
+ * 「书名」+「难度3 · 191 KB」，两本同名不同难度的才分得清。 */
+function docxLabel(name) {
+  const base = name.replace(/\.docx$/i, "");
+  const m = base.match(/^(.*)_难度(\d+)_中英对照版$/);
+  return m ? { title: m[1], tag: "难度" + m[2] } : { title: base, tag: "" };
+}
+
+function renderDocxs(items) {
+  const ul = $("docx-list");
+  if (!ul) return;
+  ul.innerHTML = "";
+  $("docx-count").textContent = items.length ? "(" + items.length + ")" : "";
+  if (!items.length) {
+    ul.innerHTML = '<li style="cursor:default;color:#9aa0b4">还没有译文 docx —— 跑一次「译成英文」就会存到这儿</li>';
+    return;
+  }
+  items.forEach((it) => {
+    const li = document.createElement("li");
+    li.innerHTML = '<span class="t"></span><span class="m"></span>'
+      + '<span class="del" title="从仓库删除（不动导出目录）">✕</span>';
+    const lb = docxLabel(it.name);
+    const t = li.querySelector(".t");
+    t.textContent = lb.title;
+    t.title = it.name;                       // 悬停看完整文件名
+    const tm = [lb.tag, fmtSize(it.size || 0)].filter(Boolean).join(" · ");
+    li.querySelector(".m").textContent = tm;
+    li.addEventListener("click", async (ev) => {
+      if (ev.target.className === "del") {
+        if (!confirm("从 docx 仓库删掉这个文件？\n" + it.name +
+                     "\n（exports 里的原文件不受影响）")) return;
+        try {
+          const d = await api("/api/docx/remove", { name: it.name });
+          renderDocxs(d.items || []);
+          toast("已从仓库删除");
+        } catch (e) { toast("删除失败：" + e.message); }
+        return;
+      }
+      try {
+        await api("/api/docx/open", { name: it.name });
+        setStatus("已用 Word 打开：" + it.name);
+      } catch (e) { toast("打开失败：" + e.message); }
     });
     ul.appendChild(li);
   });
@@ -306,6 +372,9 @@ async function refresh() {
   $("cache-badge").textContent = "缓存 " + (S.state.cache_mb || 0) + " MB";
   fillVoices();
   renderBooks();
+  loadDocxs();
+  if (S.state.lang) S.lang = S.state.lang;
+  syncLang();
   if (S.state.current) {
     $("book-title").textContent = S.state.current.title;
     $("book-meta").textContent = S.state.current.chars + " 字 · "
@@ -378,12 +447,14 @@ async function afterOpen() {
   $("book-meta").textContent = b.chars + " 字 · " + b.seg_count + " 段 · 编码 "
     + b.encoding + " · 导入于 " + b.added;
   syncEncSelect(b);
+  S.lang = (S.state && S.state.lang) || "zh";
+  syncLang();
   const startSeg = (b.progress && b.progress.seg) || 0;
   const from = Math.max(0, startSeg - 5);
   await loadSegs(from);
   S.cur = startSeg;
   highlight(true);
-  api("/api/prefetch", { seg: startSeg }).catch(() => {});
+  api("/api/prefetch", { seg: startSeg, lang: S.lang }).catch(() => {});
 }
 
 /* ── 播放 ──
@@ -401,6 +472,23 @@ function isAbort(e) {
   return !!e && (e.name === "AbortError" || /interrupted by a new load request|interrupted by the user agent/i.test(e.message || ""));
 }
 
+/* ── 朗读语言：中英对照书可以选这一段念中文还是念英文 ── */
+function syncLang() {
+  const bi = !!(S.state && S.state.bilingual);
+  $("lang-switch").classList.toggle("hidden", !bi);
+  $("lang-zh").classList.toggle("on", S.lang !== "en");
+  $("lang-en").classList.toggle("on", S.lang === "en");
+}
+
+function setLang(lang) {
+  const next = lang === "en" ? "en" : "zh";
+  if (next === S.lang) return;
+  S.lang = next;
+  syncLang();
+  api("/api/lang", { lang: S.lang }).catch(() => {});
+  if (S.cur >= 0) playSeg(S.cur);        // 立刻用另一种语言重念这一段
+}
+
 function playSeg(i) {
   if (i < 0 || (S.total && i >= S.total)) return;
 
@@ -415,7 +503,8 @@ function playSeg(i) {
   setStatus("合成第 " + (i + 1) + " 段…");
   paintPlay();
 
-  audio.src = "/api/audio?seg=" + i + "&token=" + encodeURIComponent(T);
+  audio.src = "/api/audio?seg=" + i + "&lang=" + encodeURIComponent(S.lang)
+    + "&token=" + encodeURIComponent(T);
   audio.play().then(() => {
     if (token !== playToken) return;          // 已被后来的切段取代 → 丢弃
     pendingSeg = -1;
@@ -435,7 +524,7 @@ function playSeg(i) {
     toast("播放失败：" + ((e && e.message) || e));
   });
 
-  api("/api/prefetch", { seg: i + 1 }).catch(() => {});
+  api("/api/prefetch", { seg: i + 1, lang: S.lang }).catch(() => {});
   saveProgress();
 }
 
@@ -675,3 +764,297 @@ setInterval(async () => {
     window.pywebview.api.ready();
   }
 })();
+
+/* ═══════════════ 译成英文（DeepSeek · 高考难度） ═══════════════ */
+const TR = { cfg: null, timer: null, running: false, files: [] };
+
+function trEl(tag, props, kids) {
+  const n = document.createElement(tag);
+  if (props) for (const k in props) {
+    if (k === "class") n.className = props[k];
+    else if (k === "text") n.textContent = props[k];
+    else if (k.startsWith("on")) n.addEventListener(k.slice(2), props[k]);
+    else n.setAttribute(k, props[k]);
+  }
+  (kids || []).forEach((c) => n.appendChild(c));
+  return n;
+}
+
+function trOpen() {
+  $("tr-modal").classList.remove("hidden");
+  trRestoreOutputs();
+  trRestoreAutoImport();
+  trUpdateOutHint();
+  trLoadCfg();
+}
+
+function trClose() {
+  $("tr-modal").classList.add("hidden");
+}
+
+/* —— 产物勾选：中英对照 / 纯英文 / 英文音频 / 中文音频，各勾各的 —— */
+const TR_OUT_KEYS = ["bilingual", "en_doc", "mp3_en", "mp3_zh"];
+const TR_OUT_EL = {
+  bilingual: "tr-out-bilingual", en_doc: "tr-out-endoc",
+  mp3_en: "tr-out-mp3en", mp3_zh: "tr-out-mp3zh",
+};
+
+function trGetOutputs() {
+  const o = {};
+  TR_OUT_KEYS.forEach((k) => { o[k] = !!$(TR_OUT_EL[k]).checked; });
+  return o;
+}
+
+function trSetOutputs(o) {
+  TR_OUT_KEYS.forEach((k) => { if (k in o) $(TR_OUT_EL[k]).checked = !!o[k]; });
+  trUpdateOutHint();
+}
+
+function trSaveOutputs() {
+  try { localStorage.setItem("tr_outputs", JSON.stringify(trGetOutputs())); } catch (e) {}
+}
+
+function trRestoreOutputs() {
+  try {
+    const s = localStorage.getItem("tr_outputs");
+    if (s) {
+      const o = JSON.parse(s);
+      TR_OUT_KEYS.forEach((k) => { if (k in o) $(TR_OUT_EL[k]).checked = !!o[k]; });
+    }
+  } catch (e) {}
+}
+
+function trNeedEn() {
+  const o = trGetOutputs();
+  return o.bilingual || o.en_doc || o.mp3_en;
+}
+
+/* —— 收尾：译完把 txt 直接收进书库，省得再手动导入一次 —— */
+function trAutoImport() { return !!$("tr-auto-import").checked; }
+
+function trSaveAutoImport() {
+  try { localStorage.setItem("tr_auto_import", trAutoImport() ? "1" : "0"); } catch (e) {}
+}
+
+function trRestoreAutoImport() {
+  try {
+    const s = localStorage.getItem("tr_auto_import");
+    if (s === "0") $("tr-auto-import").checked = false;
+    else if (s === "1") $("tr-auto-import").checked = true;
+  } catch (e) {}
+}
+
+function trUpdateOutHint() {
+  const o = trGetOutputs();
+  const any = TR_OUT_KEYS.some((k) => o[k]);
+  const needEn = trNeedEn();
+  const hint = $("tr-out-hint");
+  if (!any) {
+    hint.textContent = "⚠ 至少要勾一个产物";
+    hint.style.color = "#e66";
+  } else if (!needEn) {
+    hint.textContent = "只出中文音频：不调用 DeepSeek、不翻译，直接合成原文朗读";
+    hint.style.color = "";
+  } else {
+    hint.textContent = "";
+    hint.style.color = "";
+  }
+  $("tr-level").disabled = !needEn;      // 不翻译时难度没意义
+  $("tr-start").textContent = needEn ? "开始翻译" : "开始导出";
+  $("tr-start").disabled = !any;
+  const ih = $("tr-import-hint");
+  if (ih) {
+    ih.textContent = !(o.bilingual || o.en_doc) ? "（没勾文本产物，无需导入）"
+      : (trAutoImport() ? "生成后直接进书库，导入完就能听" : "只导出文件，不进书库");
+  }
+}
+
+async function trLoadCfg() {
+  try {
+    const d = await api("/api/translate/status");
+    TR.cfg = d.cfg || null;
+    if (d.cfg) {
+      $("tr-enabled").checked = !!d.cfg.enabled;
+      trRenderCfg(d.cfg);
+    }
+    if (!d.has_key) {
+      $("tr-status").textContent = "⚠ 没有 API key：请把 DeepSeek key 写进 data/apikey.txt 再重启";
+    }
+    if (d.running) trStartPoll();
+  } catch (e) { /* 忽略 */ }
+}
+
+function trRenderCfg(cfg) {
+  const box = $("tr-cfg-list");
+  box.innerHTML = "";
+  const names = { 1: "90 分以下", 2: "90–105", 3: "105–120", 4: "120–135" };
+  Object.keys(cfg.levels || {}).sort().forEach((k) => {
+    const lv = cfg.levels[k];
+    const num = trEl("input", { type: "number", min: "6", max: "60", value: String(lv.max_words) });
+    num.dataset.lv = k;
+    num.className = "cfg-words";
+    const ta = trEl("textarea", {});
+    ta.value = lv.vocab || "";
+    ta.dataset.lv = k;
+    ta.className = "cfg-vocab";
+    box.appendChild(trEl("div", { class: "cfg-item" }, [
+      trEl("div", { class: "cfg-head" }, [
+        trEl("b", { text: `难度${k} · ${names[k]}` }),
+        trEl("span", { class: "tiny", text: "单句词数" }), num,
+      ]),
+      ta,
+    ]));
+  });
+  trUpdateWordsHint();
+}
+
+function trUpdateWordsHint() {
+  const lv = $("tr-level").value;
+  const c = TR.cfg && TR.cfg.levels && TR.cfg.levels[lv];
+  $("tr-words").textContent = c ? `单句 ≤ ${c.max_words} 词` : "";
+}
+
+async function trSaveCfg() {
+  const levels = {};
+  document.querySelectorAll("#tr-cfg-list .cfg-words").forEach((n) => {
+    const k = n.dataset.lv;
+    levels[k] = levels[k] || {};
+    levels[k].max_words = Number(n.value);
+  });
+  document.querySelectorAll("#tr-cfg-list .cfg-vocab").forEach((n) => {
+    const k = n.dataset.lv;
+    levels[k] = levels[k] || {};
+    levels[k].vocab = n.value;
+  });
+  try {
+    const d = await api("/api/translate/cfg", { enabled: $("tr-enabled").checked, levels });
+    TR.cfg = d.cfg;
+    trRenderCfg(d.cfg);
+    toast("难度参数已保存");
+  } catch (e) { toast("保存失败：" + e.message); }
+}
+
+async function trStart() {
+  const st = S.state || {};
+  const bid = st.current && st.current.id;
+  if (!bid) { toast("先打开一本书"); return; }
+  const outputs = trGetOutputs();
+  if (!TR_OUT_KEYS.some((k) => outputs[k])) { toast("至少要勾一个产物"); return; }
+  const body = { id: bid, level: Number($("tr-level").value), outputs,
+                 auto_import: trAutoImport() };
+  try {
+    await api("/api/translate", body);
+    trSaveOutputs();
+    trSaveAutoImport();
+    $("tr-files").innerHTML = "";
+    $("tr-status").textContent = "已开始…";
+    trStartPoll();
+  } catch (e) {
+    $("tr-status").textContent = "启动失败：" + e.message;
+  }
+}
+
+function trStartPoll() {
+  if (TR.timer) return;
+  TR.running = true;
+  $("tr-cancel").classList.remove("hidden");
+  $("tr-start").disabled = true;
+  TR.timer = setInterval(trPoll, 1000);
+  trPoll();
+}
+
+async function trPoll() {
+  let d;
+  try { d = await api("/api/translate/status"); } catch (e) { return; }
+  const pct = d.total ? Math.min(100, Math.round((d.done / d.total) * 100)) : 0;
+  $("tr-bar-fill").style.width = pct + "%";
+  let line = d.error ? `❌ ${d.error}` : (d.stage || "就绪");
+  if (d.total) line += `　${d.done}/${d.total}（${pct}%）`;
+  $("tr-status").textContent = line;
+
+  if (!d.running) {
+    clearInterval(TR.timer);
+    TR.timer = null;
+    TR.running = false;
+    $("tr-cancel").classList.add("hidden");
+    trUpdateOutHint();
+    if (d.files && d.files.length) trRenderFiles(d.files);
+    if (d.imported && d.imported.length) trRenderImported(d.imported);
+    loadDocxs();                     // 新译出的 docx 进仓库，列表立刻刷新
+  }
+}
+
+/* 翻译结束后：把「已导入书库」的结果补在文件清单下面 */
+function trRenderImported(list) {
+  const box = $("tr-files");
+  let ok = false;
+  list.forEach((it) => {
+    const txt = it.error ? "⚠ 导入失败：" + it.error
+      : (it.reused ? "📚 已刷新书库：" : "📚 已导入书库：") + it.title;
+    if (!it.error) ok = true;
+    box.appendChild(trEl("div", { class: "tiny", style: "opacity:.85" },
+      [trEl("span", { text: txt })]));
+  });
+  if (ok) refresh().catch(() => {});      // 让左侧书库立刻出现新书
+}
+
+function trRenderFiles(files) {
+  const box = $("tr-files");
+  box.innerHTML = "";
+  files.forEach((p) => {
+    const name = p.split(/[\/]/).pop();
+    box.appendChild(trEl("div", { class: "tiny" }, [
+      trEl("a", { href: "#", text: "📄 " + name, onclick: (ev) => {
+        ev.preventDefault();
+        api("/api/open_file", { path: p }).catch((e) => toast("打不开：" + e.message));
+      } }),
+    ]));
+  });
+  const dir = files[0].replace(/[\/][^\/]+$/, "");
+  box.appendChild(trEl("div", { class: "tiny", style: "opacity:.6;margin-top:4px" },
+    [trEl("span", { text: "目录：" + dir })]));
+}
+
+async function trCancel() {
+  try {
+    await api("/api/translate/cancel", {});
+    $("tr-status").textContent = "正在取消…";
+  } catch (e) { toast("取消失败：" + e.message); }
+}
+
+$("btn-translate").addEventListener("click", trOpen);
+$("tr-close").addEventListener("click", trClose);
+$("tr-start").addEventListener("click", trStart);
+$("tr-cancel").addEventListener("click", trCancel);
+$("tr-cfg-save").addEventListener("click", trSaveCfg);
+$("tr-level").addEventListener("change", trUpdateWordsHint);
+
+/* docx 仓库 */
+$("btn-docx-refresh").addEventListener("click", () => { loadDocxs(); toast("docx 仓库已刷新"); });
+$("btn-docx-dir").addEventListener("click", () => {
+  api("/api/docx/reveal", {}).catch((e) => toast("打不开目录：" + e.message));
+});
+
+/* 产物勾选：变了就存 + 刷新提示 */
+TR_OUT_KEYS.forEach((k) => {
+  $(TR_OUT_EL[k]).addEventListener("change", () => { trSaveOutputs(); trUpdateOutHint(); });
+});
+/* 一键：只要英文 / 只要中文 */
+$("tr-only-en").addEventListener("click", () => {
+  trSetOutputs({ bilingual: false, en_doc: true, mp3_en: true, mp3_zh: false });
+  trSaveOutputs();
+});
+$("tr-only-zh").addEventListener("click", () => {
+  trSetOutputs({ bilingual: false, en_doc: false, mp3_en: false, mp3_zh: true });
+  trSaveOutputs();
+});
+/* 自动导入书库：勾选变化就存 + 刷新提示 */
+$("tr-auto-import").addEventListener("change", () => {
+  trSaveAutoImport();
+  trUpdateOutHint();
+});
+/* 朗读语言切换 */
+$("lang-zh").addEventListener("click", () => setLang("zh"));
+$("lang-en").addEventListener("click", () => setLang("en"));
+
+$("tr-modal").addEventListener("click", (ev) => { if (ev.target.id === "tr-modal") trClose(); });

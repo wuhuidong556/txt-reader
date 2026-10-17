@@ -8,6 +8,7 @@ books/
 cache/
 data/
 exports/
+docx/
 
 # ── 构建产物 ──
 build/

@@ -38,11 +38,18 @@ aside {
 }
 .pane { padding: 10px 12px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
 .pane.grow { flex: 1; }
-.pane h3 { margin: 0 0 8px; font-size: 13px; color: var(--dim); font-weight: 600; }
+.pane h3 { margin: 0 0 8px; font-size: 13px; color: var(--dim); font-weight: 600;
+  display: flex; align-items: center; gap: 6px; }
+.pane-acts { margin-left: auto; display: inline-flex; gap: 2px; }
+.mini { background: transparent; border: 0; color: var(--dim); cursor: pointer;
+  font-size: 12.5px; line-height: 1; padding: 3px 5px; border-radius: 5px; }
+.mini:hover { background: var(--panel2); color: #fff; }
 .tiny { font-size: 11px; color: var(--dim); font-weight: 400; }
 
 .book-list, .chap-list { list-style: none; margin: 0; padding: 0; overflow: auto; }
 .book-list { max-height: 34vh; }
+.docx-list { max-height: 24vh; }
+.docx-list li .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .book-list li, .chap-list li {
   padding: 7px 9px; border-radius: 7px; cursor: pointer; font-size: 13px;
   display: flex; justify-content: space-between; gap: 8px; align-items: baseline;
@@ -71,6 +78,9 @@ input[type=range] {
   padding: 7px 12px; margin: 3px 0; border-radius: 8px; cursor: pointer;
   font-size: 16.5px; line-height: 1.9; color: #d6d8e2; transition: background .12s;
   border-left: 3px solid transparent;
+  /* 中英对照的段落里自带换行（英文一行、中文一行），必须保留；
+     默认 white-space: normal 会把换行压成空格，两种语言粘成一行。 */
+  white-space: pre-wrap;
 }
 .seg:hover { background: var(--panel); }
 .seg.cur { background: var(--hi); border-left-color: var(--accent); color: #fff; }
@@ -107,3 +117,39 @@ select {
 .text::-webkit-scrollbar-thumb, .book-list::-webkit-scrollbar-thumb, .chap-list::-webkit-scrollbar-thumb {
   background: #333850; border-radius: 9px;
 }
+
+/* ── 翻译弹窗 ── */
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;
+  justify-content:center;z-index:50;padding:24px}
+.modal-box{background:var(--bg2,#1b1f27);border:1px solid #333a46;border-radius:12px;
+  width:min(680px,100%);max-height:88vh;display:flex;flex-direction:column;
+  box-shadow:0 20px 60px rgba(0,0,0,.5)}
+.modal-head{display:flex;justify-content:space-between;align-items:center;
+  padding:14px 18px;border-bottom:1px solid #2a313c}
+.modal-body{padding:16px 18px;overflow:auto;display:flex;flex-direction:column;gap:10px}
+.modal-foot{display:flex;justify-content:flex-end;gap:10px;padding:12px 18px;
+  border-top:1px solid #2a313c}
+.tr-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.tr-label{opacity:.75;font-size:13px}
+.tr-select{flex:1;min-width:260px}
+.chk{display:flex;align-items:center;gap:8px;font-size:13px;opacity:.9}
+.tr-outs{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.tr-quick{padding:2px 9px;font-size:12px;border-radius:6px}
+/* 中英对照书：中文 / English 朗读切换（分段小按钮） */
+.lang-switch{display:inline-flex;border:1px solid #3a4250;border-radius:7px;overflow:hidden}
+.lang-btn{padding:3px 10px;font-size:12px;background:transparent;border:0;color:#9aa4b2;cursor:pointer}
+.lang-btn:hover{color:#e6ebf2;background:#2a313c}
+.lang-btn.on{background:#4b8bf5;color:#fff}
+.tr-bar{height:6px;background:#2a313c;border-radius:3px;overflow:hidden;margin-top:4px}
+#tr-bar-fill{height:100%;width:0;background:#4b8bf5;transition:width .3s}
+.tr-files{display:flex;flex-direction:column;gap:4px;font-size:12.5px;max-height:150px;overflow:auto}
+.tr-files a{color:#7fb3ff;text-decoration:none;word-break:break-all}
+.tr-adv{margin-top:6px;border-top:1px solid #2a313c;padding-top:10px}
+.tr-adv summary{cursor:pointer;font-size:13px;opacity:.85}
+.tr-cfg{display:flex;flex-direction:column;gap:8px;margin:10px 0}
+.tr-cfg .cfg-item{border:1px solid #2a313c;border-radius:8px;padding:8px 10px;
+  display:flex;flex-direction:column;gap:6px}
+.tr-cfg .cfg-head{display:flex;align-items:center;gap:8px;font-size:12.5px}
+.tr-cfg input[type=number]{width:64px}
+.tr-cfg textarea{width:100%;min-height:44px;resize:vertical;font-size:12px;
+  background:#11141a;color:#ddd;border:1px solid #333a46;border-radius:6px;padding:6px}

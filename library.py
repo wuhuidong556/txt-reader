@@ -21,9 +21,10 @@ from typing import Any
 from charset_normalizer import from_path
 
 try:
-    from engine import split_segments
+    from engine import SEG_TARGET, split_segments
 except Exception:                                    # noqa: BLE001
     split_segments = None                            # type: ignore[assignment]
+    SEG_TARGET = 180                                 # type: ignore[assignment]
 
 # 数据放哪：源码运行时放项目目录；**打包成 exe 后放 exe 旁边**
 # —— 否则数据会落在 `_internal/` 里，用户既看不到也不好备份。
@@ -38,6 +39,7 @@ BOOKS = ROOT / "books"
 DATA = ROOT / "data"
 CACHE = ROOT / "cache"
 EXPORTS = ROOT / "exports"
+DOCXS = ROOT / "docx"          # 译文的 docx 仓库（中英对照版存这儿，便于集中取用）
 LIB_FILE = DATA / "library.json"
 
 # 章节标题：第一章 / 第 1 章 / 第一百二十三章 / 卷三 / 序章 / 楔子 / 后记 / Chapter 1
@@ -47,6 +49,48 @@ CHAP_PATTERNS = [
     re.compile(r"^\s*(Chapter|CHAPTER|Part|PART)\s*[0-9IVXLC]+.{0,40}$"),
     re.compile(r"^\s*[0-9]{1,4}\s*[、.．]\s*\S.{0,40}$"),
 ]
+
+
+def _is_latin(s: str) -> bool:
+    letters = sum(1 for c in s if c < "\x80" and c.isalpha())
+    han = sum(1 for c in s if "\u4e00" <= c <= "\u9fff")
+    return letters >= 3 and letters > han * 2
+
+
+def _is_han(s: str) -> bool:
+    letters = sum(1 for c in s if c < "\x80" and c.isalpha())
+    han = sum(1 for c in s if "\u4e00" <= c <= "\u9fff")
+    return han >= 3 and han >= letters
+
+
+def _pair_layout(text: str) -> bool:
+    """判断是不是「英文一行 + 中文一行」的中英对照稿。
+
+    为什么要判断：对照稿必须**按整段**切。按 180 字硬切会把一组的
+    英文和中文拆进不同的段，读者看到的就是「有的句子没翻译」——
+    其实是它的英文被切到上一段去了。
+
+    只看开头 8000 字、最多 20 个空行块：块内既有拉丁为主的行走、也有汉字为主的
+    行走，且这种块占比够高，就认定是对照稿。
+    """
+    blocks = [b for b in re.split(r"\n\s*\n", text[:8000]) if b.strip()][:20]
+    if len(blocks) < 3:
+        return False
+    hit = 0
+    for b in blocks:
+        lines = [ln.strip() for ln in b.split("\n") if ln.strip()]
+        if len(lines) < 2:
+            continue
+        if any(_is_latin(ln) for ln in lines) and any(_is_han(ln) for ln in lines):
+            hit += 1
+    return hit >= max(3, int(len(blocks) * 0.6))
+
+
+def _split_for(text: str) -> list[dict[str, Any]]:
+    """按正文形态选切段方式：对照稿按整段切，普通书按 180 字左右切。"""
+    if split_segments is None:
+        return []
+    return split_segments(text, 10 ** 9 if _pair_layout(text) else SEG_TARGET)
 
 
 def detect_encoding(path: pathlib.Path) -> tuple[str, float]:
@@ -120,9 +164,10 @@ class Library:
     """书库与阅读进度的落盘（原子写，坏不了）。"""
 
     def __init__(self) -> None:
-        for d in (BOOKS, DATA, CACHE, EXPORTS):
+        for d in (BOOKS, DATA, CACHE, EXPORTS, DOCXS):
             d.mkdir(parents=True, exist_ok=True)
         self.data: dict[str, Any] = {"books": {}, "order": []}
+        self._seg_cache: dict[str, tuple[int, list[dict[str, Any]]]] = {}
         self._load()
 
     # ── 落盘 ──
@@ -151,7 +196,7 @@ class Library:
         bid = "b_" + uuid.uuid4().hex[:10]
         (BOOKS / f"{bid}.txt").write_text(text, encoding="utf-8")
         chapters = split_chapters(text)
-        segs = split_segments(text) if split_segments else []
+        segs = _split_for(text)
         book = {
             "id": bid,
             "title": title or src.stem,
@@ -191,7 +236,7 @@ class Library:
         book = self.get(bid)
         (BOOKS / f"{bid}.txt").write_text(text, encoding="utf-8")
         chapters = split_chapters(text)
-        segs = split_segments(text) if split_segments else []
+        segs = _split_for(text)
         book.update({
             "encoding": enc,
             "requested": "auto" if auto else encoding,
@@ -226,8 +271,22 @@ class Library:
         return (BOOKS / f"{bid}.txt").read_text(encoding="utf-8")
 
     def segments_of(self, bid: str) -> list[dict[str, Any]]:
-        text = self.text_of(bid)
-        return split_segments(text) if split_segments else []
+        """切段结果按正文 mtime 缓存。
+
+        为什么要缓存：`/api/state` 被前端每几秒轮询一次，而界面要显示「共 N 段」。
+        每次轮询都把几十万字重新切一遍太浪费（实测对照稿 27 万字要 200ms+）。
+        """
+        p = BOOKS / f"{bid}.txt"
+        try:
+            mt = p.stat().st_mtime_ns
+        except OSError:
+            return []
+        hit = self._seg_cache.get(bid)
+        if hit and hit[0] == mt:
+            return list(hit[1])
+        segs = _split_for(p.read_text(encoding="utf-8"))
+        self._seg_cache[bid] = (mt, segs)
+        return list(segs)
 
     def chapter_at(self, bid: str, char_pos: int) -> int:
         for i, c in enumerate(self.get(bid)["chapters"]):
