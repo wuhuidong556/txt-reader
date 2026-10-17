@@ -45,7 +45,7 @@
 需要 **Python 3.10+**（开发环境为 3.13）。
 
 ```bash
-git clone <this-repo>
+git clone https://github.com/wuhuidong556/txt-reader.git
 cd txt-reader
 pip install -r requirements.txt
 
